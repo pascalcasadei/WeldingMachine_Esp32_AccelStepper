@@ -93,7 +93,6 @@ bool homingXCompletato = false;
 bool homingYCompletato = false;
 unsigned long homingStartTime = 0;
 
-
 // =========== OGGETTI GLOBALI ===========
 AccelStepper stepperX(AccelStepper::DRIVER, STEP_PIN_X, DIR_PIN_X);
 AccelStepper stepperY(AccelStepper::DRIVER, STEP_PIN_Y, DIR_PIN_Y);
@@ -201,6 +200,16 @@ void setup()
     // Display prima di tutto
     setupDisplay();
 
+    // ⚠️ AGGIUNGI QUESTE RIGHE CRITICHE:
+    pinMode(STEP_PIN_X, OUTPUT);
+    pinMode(DIR_PIN_X, OUTPUT);
+    pinMode(STEP_PIN_Y, OUTPUT);
+    pinMode(DIR_PIN_Y, OUTPUT);
+    digitalWrite(STEP_PIN_X, LOW);
+    digitalWrite(DIR_PIN_X, LOW);
+    digitalWrite(STEP_PIN_Y, LOW);
+    digitalWrite(DIR_PIN_Y, LOW);
+
     display.setTextSize(2);
     display.setCursor(10, 50);
     display.print("AVVIO...");
@@ -232,6 +241,10 @@ void setup()
     stepperY.setMaxSpeed(velocitaMotore2);
     stepperX.setAcceleration(2000);
     stepperY.setAcceleration(2000);
+
+    // ⚠️ AGGIUNGI MOVIMENTO INIZIALE DI TEST
+    stepperX.move(100);
+    stepperY.move(100);
 
     currentState = STATE_OFF;
 
@@ -324,15 +337,16 @@ void checkButtons()
     switch (currentState)
     {
     case STATE_OFF:
-    if (startPressed) {
-        currentState = STATE_HOMING;
-        homingInCorso = true;
-        homingXCompletato = false;
-        homingYCompletato = false;
-        homingStartTime = millis();
-        abilitaMotori();
-    }
-    break;
+        if (startPressed)
+        {
+            currentState = STATE_HOMING;
+            homingInCorso = true;
+            homingXCompletato = false;
+            homingYCompletato = false;
+            homingStartTime = millis();
+            abilitaMotori();
+        }
+        break;
     case STATE_READY:
         if (startPressed)
         {
@@ -396,40 +410,49 @@ void aggiornaPotenziometri()
     }
 }
 
-void professionalHoming() {
-    if (!homingInCorso) return;
+void professionalHoming()
+{
+    if (!homingInCorso)
+        return;
 
     unsigned long currentTime = millis();
-    
+
     // Timeout sicurezza
-    if (currentTime - homingStartTime > 30000) {
+    if (currentTime - homingStartTime > 30000)
+    {
         Serial.println("HOMING TIMEOUT");
         emergencyStop();
         return;
     }
 
     // Homing asse X
-    if (!homingXCompletato) {
-        if (digitalRead(LIMIT_X_MIN) == LOW) {
+    if (!homingXCompletato)
+    {
+        if (digitalRead(LIMIT_X_MIN) == LOW)
+        {
             // Caso 1: Sensore GIÀ PREMUTO - allontanati prima
-            if (!stepperX.isRunning()) {
+            if (!stepperX.isRunning())
+            {
                 Serial.println("Sensore X già premuto - mi allontano");
                 stepperX.move(2000); // si allontana di 2000 passi
                 stepperX.setSpeed(400);
             }
-            
+
             // Caso 2: Sensore premuto DURANTE movimento - homing completato
-            else {
+            else
+            {
                 Serial.println("Homing X completato");
                 stepperX.stop();
                 stepperX.setCurrentPosition(0);
-                
+
                 // Allontanamento finale
                 stepperX.move(1000);
                 stepperX.setSpeed(300);
-                while (stepperX.distanceToGo() != 0) {
+                while (stepperX.distanceToGo() != 0)
+                {
                     stepperX.runSpeedToPosition();
-                    if (stopPressed) {
+                    if (stopPressed)
+                    {
                         emergencyStop();
                         return;
                     }
@@ -437,10 +460,12 @@ void professionalHoming() {
                 stepperX.setCurrentPosition(0);
                 homingXCompletato = true;
             }
-        } 
-        else {
+        }
+        else
+        {
             // Caso 3: Sensore NON premuto - continua homing
-            if (!stepperX.isRunning()) {
+            if (!stepperX.isRunning())
+            {
                 Serial.println("Cerca finecorsa X...");
                 stepperX.setSpeed(-300);
             }
@@ -450,24 +475,30 @@ void professionalHoming() {
     }
 
     // Homing asse Y (stessa logica)
-    if (!homingYCompletato) {
-        if (digitalRead(LIMIT_Y_MIN) == LOW) {
+    if (!homingYCompletato)
+    {
+        if (digitalRead(LIMIT_Y_MIN) == LOW)
+        {
             // Sensore già premuto
-            if (!stepperY.isRunning()) {
+            if (!stepperY.isRunning())
+            {
                 Serial.println("Sensore Y già premuto - mi allontano");
                 stepperY.move(2000);
                 stepperY.setSpeed(400);
             }
-            else {
+            else
+            {
                 Serial.println("Homing Y completato");
                 stepperY.stop();
                 stepperY.setCurrentPosition(0);
-                
+
                 stepperY.move(1000);
                 stepperY.setSpeed(300);
-                while (stepperY.distanceToGo() != 0) {
+                while (stepperY.distanceToGo() != 0)
+                {
                     stepperY.runSpeedToPosition();
-                    if (stopPressed) {
+                    if (stopPressed)
+                    {
                         emergencyStop();
                         return;
                     }
@@ -475,10 +506,12 @@ void professionalHoming() {
                 stepperY.setCurrentPosition(0);
                 homingYCompletato = true;
             }
-        } 
-        else {
+        }
+        else
+        {
             // Cerca finecorsa
-            if (!stepperY.isRunning()) {
+            if (!stepperY.isRunning())
+            {
                 Serial.println("Cerca finecorsa Y...");
                 stepperY.setSpeed(-300);
             }
@@ -488,7 +521,8 @@ void professionalHoming() {
     }
 
     // Homing completato
-    if (homingXCompletato && homingYCompletato) {
+    if (homingXCompletato && homingYCompletato)
+    {
         homingInCorso = false;
         currentState = STATE_READY;
         Serial.println("HOMING COMPLETATO");
@@ -615,19 +649,19 @@ void controllaMotore2()
 void pauseCycle()
 {
     Serial.println("⏸️ PAUSA: Fermo motori e retrocedo X di 200 passi");
-    
+
     // 1. Ferma immediatamente entrambi i motori
     stepperX.stop();
     stepperY.stop();
-    
+
     // 2. Retrocede il motore X di 200 passi (un giro)
     stepperX.setMaxSpeed(800); // Velocità moderata per la retrocessione
-    stepperX.move(-200); // Retrocede di 200 passi
-    
+    stepperX.move(-200);       // Retrocede di 200 passi
+
     // 3. Disabilita motori e relè
     disabilitaMotori();
     disattivaRele();
-    
+
     currentState = STATE_PAUSED;
     Serial.println("✅ PAUSA: Motore X in retrocessione di 200 passi");
 }
@@ -635,24 +669,26 @@ void pauseCycle()
 void resumeCycle()
 {
     Serial.println("▶️ RIPRESA: Riavvio ciclo dalla posizione corrente");
-    
+
     currentState = STATE_RUNNING;
     abilitaMotori();
     attivaRele();
-    
+
     // Ripristina il movimento di entrambi i motori dalla posizione corrente
-    if (!motore1Completato) {
+    if (!motore1Completato)
+    {
         // Continua verso il finecorsa MAX
         stepperX.setMaxSpeed(velocitaMotore1);
         stepperX.moveTo(50000);
     }
-    
-    if (!motore2Completato) {
+
+    if (!motore2Completato)
+    {
         // Riprende l'oscillazione
         stepperY.setMaxSpeed(velocitaMotore2);
         stepperY.moveTo(50000);
     }
-    
+
     Serial.println("✅ RIPRESA: Ciclo riavviato");
 }
 
@@ -778,6 +814,10 @@ void debugRele()
 // =========== LOOP PRINCIPALE ===========
 void loop()
 {
+    // ⚠️ QUESTE DUE RIGHE SONO OBBLIGATORIE IN OGNI CICLO!
+    stepperX.run();
+    stepperY.run();
+
     checkButtons();
     aggiornaPotenziometri();
     debugRele();
@@ -791,19 +831,19 @@ void loop()
 
     case STATE_RUNNING:
         cicloCoordinato();
-        stepperX.run();
-        stepperY.run();
+        // stepperX.run();
+        // stepperY.run();
         break;
 
     case STATE_PAUSED:
         // ✅ Durante la pausa, permette al motore X di completare la retrocessione
-        stepperX.run();
-        stepperY.run();
+        // stepperX.run();
+        // stepperY.run();
         break;
 
     default:
-        stepperX.run();
-        stepperY.run();
+        // stepperX.run();
+        // stepperY.run();
         break;
     }
 
