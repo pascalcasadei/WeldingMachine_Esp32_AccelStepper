@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
+#include <MultiStepper.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 
@@ -96,35 +97,28 @@ unsigned long homingStartTime = 0;
 // =========== OGGETTI GLOBALI ===========
 AccelStepper stepperX(AccelStepper::DRIVER, STEP_PIN_X, DIR_PIN_X);
 AccelStepper stepperY(AccelStepper::DRIVER, STEP_PIN_Y, DIR_PIN_Y);
+MultiStepper steppers;
 Adafruit_SH1107 display = Adafruit_SH1107(128, 128, &Wire);
 
+// Array per posizioni MultiStepper
+long targetPositions[2] = {0, 0};
+
 // =========== PROTOTIPI FUNZIONI ===========
-// Gestione sistema
 void emergencyStop();
 void checkButtons();
 void aggiornaPotenziometri();
 void professionalHoming();
 void updateDisplay();
 void setupDisplay();
-
-// Gestione ciclo
 void cicloCoordinato();
-void avviaMotore1();
-void avviaMotore2();
 void controllaMotore2();
 void fermaTutto();
-
-// Gestione stati
 void pauseCycle();
 void resumeCycle();
-
-// Gestione hardware
 void attivaRele();
 void disattivaRele();
 void abilitaMotori();
 void disabilitaMotori();
-
-// Debug e utilità
 void debugRele();
 
 // =========== SETUP DISPLAY ===========
@@ -200,7 +194,7 @@ void setup()
     // Display prima di tutto
     setupDisplay();
 
-    // ⚠️ AGGIUNGI QUESTE RIGHE CRITICHE:
+    // Configurazione pin STEP/DIR
     pinMode(STEP_PIN_X, OUTPUT);
     pinMode(DIR_PIN_X, OUTPUT);
     pinMode(STEP_PIN_Y, OUTPUT);
@@ -227,24 +221,24 @@ void setup()
     pinMode(BUTTON_PAUSE, INPUT_PULLUP);
 
     // Finecorsa
-    pinMode(LIMIT_X_MIN, INPUT);
-    pinMode(LIMIT_X_MAX, INPUT);
-    pinMode(LIMIT_Y_MIN, INPUT);
-    pinMode(LIMIT_Y_MAX, INPUT);
+    pinMode(LIMIT_X_MIN, INPUT_PULLUP);
+    pinMode(LIMIT_X_MAX, INPUT_PULLUP);
+    pinMode(LIMIT_Y_MIN, INPUT_PULLUP);
+    pinMode(LIMIT_Y_MAX, INPUT_PULLUP);
 
     // Relè
     pinMode(RELE_PIN, OUTPUT);
     disattivaRele();
 
-    // Stepper configuration - ACCELSTEPPER
+    // ⭐ CONFIGURAZIONE MULTISTEPPER
+    steppers.addStepper(stepperX);
+    steppers.addStepper(stepperY);
+
+    // Configurazione stepper
     stepperX.setMaxSpeed(velocitaMotore1);
     stepperY.setMaxSpeed(velocitaMotore2);
     stepperX.setAcceleration(2000);
     stepperY.setAcceleration(2000);
-
-    // ⚠️ AGGIUNGI MOVIMENTO INIZIALE DI TEST
-    stepperX.move(100);
-    stepperY.move(100);
 
     currentState = STATE_OFF;
 
@@ -254,7 +248,7 @@ void setup()
     display.print("PRONTO");
     display.display();
 
-    Serial.println("Sistema pronto - Display SH1107 attivo");
+    Serial.println("Sistema pronto con MultiStepper");
 }
 
 // =========== EMERGENCY STOP ===========
@@ -410,10 +404,10 @@ void aggiornaPotenziometri()
     }
 }
 
+// =========== HOMING INTELLIGENTE ===========
 void professionalHoming()
 {
-    if (!homingInCorso)
-        return;
+    if (!homingInCorso) return;
 
     unsigned long currentTime = millis();
 
@@ -430,91 +424,44 @@ void professionalHoming()
     {
         if (digitalRead(LIMIT_X_MIN) == LOW)
         {
-            // Caso 1: Sensore GIÀ PREMUTO - allontanati prima
-            if (!stepperX.isRunning())
-            {
-                Serial.println("Sensore X già premuto - mi allontano");
-                stepperX.move(2000); // si allontana di 2000 passi
-                stepperX.setSpeed(400);
-            }
-
-            // Caso 2: Sensore premuto DURANTE movimento - homing completato
-            else
-            {
-                Serial.println("Homing X completato");
-                stepperX.stop();
-                stepperX.setCurrentPosition(0);
-
-                // Allontanamento finale
-                stepperX.move(1000);
-                stepperX.setSpeed(300);
-                while (stepperX.distanceToGo() != 0)
-                {
-                    stepperX.runSpeedToPosition();
-                    if (stopPressed)
-                    {
-                        emergencyStop();
-                        return;
-                    }
-                }
-                stepperX.setCurrentPosition(0);
-                homingXCompletato = true;
-            }
+            // Sensore attivato
+            stepperX.stop();
+            stepperX.setCurrentPosition(0);
+            homingXCompletato = true;
+            Serial.println("Homing X completato");
+            
+            // Allontanamento
+            stepperX.move(1000);
+            stepperX.setSpeed(300);
         }
         else
         {
-            // Caso 3: Sensore NON premuto - continua homing
-            if (!stepperX.isRunning())
-            {
-                Serial.println("Cerca finecorsa X...");
-                stepperX.setSpeed(-300);
-            }
+            // Cerca finecorsa
+            stepperX.setSpeed(-300);
             stepperX.runSpeed();
         }
         return;
     }
 
-    // Homing asse Y (stessa logica)
+    // Homing asse Y
     if (!homingYCompletato)
     {
         if (digitalRead(LIMIT_Y_MIN) == LOW)
         {
-            // Sensore già premuto
-            if (!stepperY.isRunning())
-            {
-                Serial.println("Sensore Y già premuto - mi allontano");
-                stepperY.move(2000);
-                stepperY.setSpeed(400);
-            }
-            else
-            {
-                Serial.println("Homing Y completato");
-                stepperY.stop();
-                stepperY.setCurrentPosition(0);
-
-                stepperY.move(1000);
-                stepperY.setSpeed(300);
-                while (stepperY.distanceToGo() != 0)
-                {
-                    stepperY.runSpeedToPosition();
-                    if (stopPressed)
-                    {
-                        emergencyStop();
-                        return;
-                    }
-                }
-                stepperY.setCurrentPosition(0);
-                homingYCompletato = true;
-            }
+            // Sensore attivato
+            stepperY.stop();
+            stepperY.setCurrentPosition(0);
+            homingYCompletato = true;
+            Serial.println("Homing Y completato");
+            
+            // Allontanamento
+            stepperY.move(1000);
+            stepperY.setSpeed(300);
         }
         else
         {
             // Cerca finecorsa
-            if (!stepperY.isRunning())
-            {
-                Serial.println("Cerca finecorsa Y...");
-                stepperY.setSpeed(-300);
-            }
+            stepperY.setSpeed(-300);
             stepperY.runSpeed();
         }
         return;
@@ -523,13 +470,19 @@ void professionalHoming()
     // Homing completato
     if (homingXCompletato && homingYCompletato)
     {
-        homingInCorso = false;
-        currentState = STATE_READY;
-        Serial.println("HOMING COMPLETATO");
+        // Completa allontanamento
+        if (stepperX.distanceToGo() == 0 && stepperY.distanceToGo() == 0)
+        {
+            homingInCorso = false;
+            currentState = STATE_READY;
+            stepperX.setCurrentPosition(0);
+            stepperY.setCurrentPosition(0);
+            Serial.println("HOMING COMPLETATO");
+        }
     }
 }
 
-// =========== CICLO COORDINATO CORRETTO ===========
+// =========== CICLO COORDINATO ===========
 void cicloCoordinato()
 {
     if (!cicloAttivo)
@@ -542,198 +495,146 @@ void cicloCoordinato()
         attivaRele();
         Serial.println("=== INIZIO CICLO COORDINATO ===");
 
-        // ✅ AVVIA ENTRAMBI I MOTORI
-        avviaMotore1();
-        avviaMotore2();
+        // ⭐ AVVIA ENTRAMBI INSIEME
+        targetPositions[0] = 50000;  // X
+        targetPositions[1] = 50000;  // Y
+        steppers.moveTo(targetPositions);
         return;
     }
 
-    // ✅ CONTROLLO FINE CICLO: quando M1 torna al MIN, ferma TUTTO
+    // ⭐ CONTROLLO FINE CICLO
     if (motore1Completato && digitalRead(LIMIT_X_MIN) == LOW)
     {
-        Serial.println("🎯 CICLO COMPLETATO - Fermo TUTTO");
+        Serial.println("🎯 CICLO COMPLETATO");
         fermaTutto();
         return;
     }
 
-    // ✅ CONTROLLO: quando M1 raggiunge MAX, inizia ritorno rapido e FERMA MOTORE 2 + RELE
+    // ⭐ CONTROLLO: quando X raggiunge MAX
     if (!motore1Completato && digitalRead(LIMIT_X_MAX) == LOW)
     {
-        Serial.println("Motore 1 raggiunto finecorsa MAX - ritorno rapido");
+        Serial.println("Motore 1 a MAX - ritorno rapido");
 
-        // ✅ FERMA MOTORE 2 (torcia saldatrice) E SPEGNI RELE
+        // Ferma Y e spegni relè
         stepperY.stop();
-        disattivaRele(); // 🔌 RELE SPENTO
+        disattivaRele();
         motore2Completato = true;
 
-        // ✅ AVVIA RITORNO RAPIDO MOTORE 1
+        // Ritorno rapido X
         stepperX.setMaxSpeed(velocitaMotore1 * 2);
         stepperX.moveTo(-50000);
         motore1Completato = true;
-
-        Serial.println("🔌 Motore 2 fermato e Rele spento durante ritorno rapido");
     }
 
-    // ✅ CONTROLLO MOTORE 2: SOLO durante l'andata (prima del ritorno rapido)
+    // ⭐ CONTROLLO MOTORE 2
     if (!motore2Completato && !motore1Completato)
     {
         controllaMotore2();
     }
 
-    // CONTROLLO DI SICUREZZA: timeout
+    // Controllo timeout
     if (millis() - tempoInizioCiclo > 120000)
     {
-        Serial.println("⏰ TIMEOUT CICLO - Fermo emergenza");
+        Serial.println("⏰ TIMEOUT CICLO");
         emergencyStop();
     }
 }
 
+// =========== GESTIONE MOTORE 2 (OSCILLAZIONE) ===========
+void controllaMotore2()
+{
+    if (motore2Completato || motore1Completato) return;
+
+    static unsigned long ultimoCambio = 0;
+    if (millis() - ultimoCambio < 500) return;
+
+    if (digitalRead(LIMIT_Y_MAX) == LOW)
+    {
+        Serial.println("🔁 M2: MAX → MIN");
+        stepperY.moveTo(-50000);
+        ultimoCambio = millis();
+    }
+    else if (digitalRead(LIMIT_Y_MIN) == LOW)
+    {
+        Serial.println("🔁 M2: MIN → MAX");
+        stepperY.moveTo(50000);
+        ultimoCambio = millis();
+    }
+}
+
 // =========== FUNZIONI AUSILIARIE ===========
-void avviaMotore1()
-{
-    stepperX.setMaxSpeed(velocitaMotore1);
-    stepperX.moveTo(50000);
-    Serial.println("Motore 1 avviato verso MAX");
-}
-
-void avviaMotore2()
-{
-    stepperY.setMaxSpeed(velocitaMotore2);
-    stepperY.moveTo(50000);
-    Serial.println("Motore 2 avviato (torcia saldatrice)");
-}
-
 void fermaTutto()
 {
     stepperX.stop();
     stepperY.stop();
     disabilitaMotori();
     disattivaRele();
-
-    motore2Completato = true;
     cicloAttivo = false;
+    motore1Completato = false;
+    motore2Completato = false;
     currentState = STATE_READY;
-
     Serial.println("=== CICLO COMPLETATO ===");
-}
-
-// =========== GESTIONE MOTORE 2 (TORCIA SALDATRICE) ===========
-void controllaMotore2()
-{
-    // ✅ CONTROLLO DI SICUREZZA: se il motore 2 deve essere fermo, esci
-    if (motore2Completato || motore1Completato)
-    {
-        return;
-    }
-
-    // ✅ ANTI-RIMBALZO: evita cambi troppo frequenti
-    static unsigned long ultimoCambio = 0;
-    if (millis() - ultimoCambio < 500)
-        return;
-
-    // ✅ OSCILLAZIONE TRA I FINECORSA
-    if (digitalRead(LIMIT_Y_MAX) == LOW)
-    {
-        Serial.println("🔁 M2: MAX → MIN (oscillazione)");
-        stepperY.moveTo(-50000);
-        ultimoCambio = millis();
-    }
-    else if (digitalRead(LIMIT_Y_MIN) == LOW)
-    {
-        Serial.println("🔁 M2: MIN → MAX (oscillazione)");
-        stepperY.moveTo(50000);
-        ultimoCambio = millis();
-    }
 }
 
 void pauseCycle()
 {
-    Serial.println("⏸️ PAUSA: Fermo motori e retrocedo X di 200 passi");
-
-    // 1. Ferma immediatamente entrambi i motori
+    Serial.println("⏸️ PAUSA");
     stepperX.stop();
     stepperY.stop();
-
-    // 2. Retrocede il motore X di 200 passi (un giro)
-    stepperX.setMaxSpeed(800); // Velocità moderata per la retrocessione
-    stepperX.move(-200);       // Retrocede di 200 passi
-
-    // 3. Disabilita motori e relè
+    stepperX.setMaxSpeed(800);
+    stepperX.move(-200);
     disabilitaMotori();
     disattivaRele();
-
     currentState = STATE_PAUSED;
-    Serial.println("✅ PAUSA: Motore X in retrocessione di 200 passi");
 }
 
 void resumeCycle()
 {
-    Serial.println("▶️ RIPRESA: Riavvio ciclo dalla posizione corrente");
-
+    Serial.println("▶️ RIPRESA");
     currentState = STATE_RUNNING;
     abilitaMotori();
     attivaRele();
 
-    // Ripristina il movimento di entrambi i motori dalla posizione corrente
     if (!motore1Completato)
     {
-        // Continua verso il finecorsa MAX
         stepperX.setMaxSpeed(velocitaMotore1);
         stepperX.moveTo(50000);
     }
 
     if (!motore2Completato)
     {
-        // Riprende l'oscillazione
         stepperY.setMaxSpeed(velocitaMotore2);
         stepperY.moveTo(50000);
     }
-
-    Serial.println("✅ RIPRESA: Ciclo riavviato");
 }
 
-// =========== AGGIORNA DISPLAY SENZA X e Y ===========
+// =========== AGGIORNA DISPLAY ===========
 void updateDisplay()
 {
     display.clearDisplay();
 
-    // Riga 1: Stato sistema (testo grande)
+    // Riga 1: Stato sistema
     display.setTextSize(2);
     display.setCursor(0, 0);
-
     switch (currentState)
     {
-    case STATE_OFF:
-        display.print("OFF");
-        break;
-    case STATE_HOMING:
-        display.print("HOMING");
-        break;
-    case STATE_READY:
-        display.print("PRONTO");
-        break;
-    case STATE_RUNNING:
-        display.print("ATTIVO");
-        break;
-    case STATE_PAUSED:
-        display.print("PAUSA");
-        break;
-    case STATE_EMERGENCY:
-        display.print("STOP");
-        break;
+    case STATE_OFF: display.print("OFF"); break;
+    case STATE_HOMING: display.print("HOMING"); break;
+    case STATE_READY: display.print("PRONTO"); break;
+    case STATE_RUNNING: display.print("ATTIVO"); break;
+    case STATE_PAUSED: display.print("PAUSA"); break;
+    case STATE_EMERGENCY: display.print("STOP"); break;
     }
 
-    // Riga 2: Stato motori
+    // Riga 2-3: Stato motori
     display.setTextSize(1);
     display.setCursor(0, 20);
     display.print("M1:");
     display.print(motore1Completato ? "RITORNO" : "ANDATA");
-
-    // Riga 3: Motore 2
     display.setCursor(0, 30);
     display.print("M2:AVANTI-INDIETRO");
 
-    // Riga 4: Rele e motori (IMPORTANTE)
+    // Riga 4: Rele e motori
     display.setCursor(0, 40);
     display.print("RELE:");
     display.print(releAttivo ? "ON " : "OFF");
@@ -746,7 +647,6 @@ void updateDisplay()
     display.print("V1:");
     display.print(velocitaMotore1);
     display.print("sps");
-
     display.setCursor(65, 55);
     display.print("V2:");
     display.print(velocitaMotore2);
@@ -773,21 +673,11 @@ void updateDisplay()
     display.print("START:");
     switch (currentState)
     {
-    case STATE_OFF:
-        display.print("Homing");
-        break;
-    case STATE_READY:
-        display.print("Avvia");
-        break;
-    case STATE_PAUSED:
-        display.print("Riprendi");
-        break;
-    case STATE_EMERGENCY:
-        display.print("Reset");
-        break;
-    default:
-        display.print("---");
-        break;
+    case STATE_OFF: display.print("Homing"); break;
+    case STATE_READY: display.print("Avvia"); break;
+    case STATE_PAUSED: display.print("Riprendi"); break;
+    case STATE_EMERGENCY: display.print("Reset"); break;
+    default: display.print("---"); break;
     }
 
     // Riga 9: Stato ciclo
@@ -804,9 +694,7 @@ void debugRele()
     static bool ultimoStatoRele = false;
     if (releAttivo != ultimoStatoRele)
     {
-        Serial.printf("🔌 RELE: %s -> %s\n",
-                      ultimoStatoRele ? "ON" : "OFF",
-                      releAttivo ? "ON" : "OFF");
+        Serial.printf("🔌 RELE: %s -> %s\n", ultimoStatoRele ? "ON" : "OFF", releAttivo ? "ON" : "OFF");
         ultimoStatoRele = releAttivo;
     }
 }
@@ -814,24 +702,8 @@ void debugRele()
 // =========== LOOP PRINCIPALE ===========
 void loop()
 {
-    // SOLO QUESTO per test
-    stepperX.run();
-    
-    // Debug
-    static unsigned long lastPrint = 0;
-    if(millis() - lastPrint > 1000) {
-        Serial.print("Pos: ");
-        Serial.print(stepperX.currentPosition());
-        Serial.print(" | ToGo: ");
-        Serial.println(stepperX.distanceToGo());
-        lastPrint = millis();
-    }
-    
-    delay(10);
-    /*
-    // ⚠️ QUESTE DUE RIGHE SONO OBBLIGATORIE IN OGNI CICLO!
-    stepperX.run();
-    stepperY.run();
+    // ⭐ UNICA CHIAMATA PER ENTRAMBI GLI STEPPER
+    steppers.run();
 
     checkButtons();
     aggiornaPotenziometri();
@@ -841,28 +713,18 @@ void loop()
     {
     case STATE_HOMING:
         professionalHoming();
-        // Non cambiamo stato qui, lo fa professionalHoming()
         break;
-
     case STATE_RUNNING:
         cicloCoordinato();
-        // stepperX.run();
-        // stepperY.run();
         break;
-
     case STATE_PAUSED:
-        // ✅ Durante la pausa, permette al motore X di completare la retrocessione
-        // stepperX.run();
-        // stepperY.run();
+        // Durante pausa permette a X di completare la retrocessione
+        stepperX.run();
         break;
-
     default:
-        // stepperX.run();
-        // stepperY.run();
         break;
     }
 
     updateDisplay();
     delay(50);
-    */
 }
